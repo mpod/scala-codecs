@@ -1,0 +1,2 @@
+# scala-codecs
+GZIP decoder
