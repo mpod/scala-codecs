@@ -2,6 +2,7 @@ package scalazip
 
 import scodec.bits.BitVector
 import scodec.{Attempt, Codec, DecodeResult, Err, SizeBound}
+import scodec.codecs.fail
 
 import scala.annotation.tailrec
 
@@ -11,31 +12,34 @@ case class Symbol[+A](symbol: A)                                 extends Huffman
 case class Branch[+A](zero: HuffmanTree[A], one: HuffmanTree[A]) extends HuffmanTree[A]
 
 object HuffmanTree {
-  def add[A, B >: A](tree: HuffmanTree[A], bits: BitVector, symbol: B): HuffmanTree[B] = tree match {
-    case Empty if bits.isEmpty                           => Symbol(symbol)
-    case Empty if !bits.head                             => Branch(add(tree, bits.tail, symbol), Empty)
-    case Empty                                           => Branch(Empty, add(tree, bits.tail, symbol))
-    case tree @ Symbol(s) if bits.isEmpty && s == symbol => tree
-    case Symbol(_)                                       => throw new IllegalArgumentException("Invalid tree.")
-    case Branch(_, _) if bits.isEmpty                    => throw new IllegalArgumentException("Invalid tree.")
-    case Branch(zero, one) if !bits.head                 => Branch(add(zero, bits.tail, symbol), one)
-    case Branch(zero, one)                               => Branch(zero, add(one, bits.tail, symbol))
-  }
+  def add[A, B >: A](tree: HuffmanTree[A], bits: BitVector, symbol: B): Either[String, HuffmanTree[B]] =
+    tree match {
+      case Empty if bits.isEmpty                           => Right(Symbol(symbol))
+      case Empty if !bits.head                             => add(tree, bits.tail, symbol).map(Branch(_, Empty))
+      case Empty                                           => add(tree, bits.tail, symbol).map(Branch(Empty, _))
+      case tree @ Symbol(s) if bits.isEmpty && s == symbol => Right(tree)
+      case Symbol(_)                                       => Left(s"Construction of a Huffman tree failed on symbol $symbol")
+      case Branch(_, _) if bits.isEmpty                    => Left(s"Construction of a Huffman tree failed on symbol $symbol")
+      case Branch(zero, one) if !bits.head                 => add(zero, bits.tail, symbol).map(Branch(_, one))
+      case Branch(zero, one)                               => add(one, bits.tail, symbol).map(Branch(zero, _))
+    }
 
-  def height(tree: HuffmanTree[_]): Int = tree match {
-    case Empty             => 0
-    case Symbol(_)         => 0
-    case Branch(zero, one) => 1 + math.max(height(zero), height(one))
-  }
+  def height(tree: HuffmanTree[_]): Int =
+    tree match {
+      case Empty             => 0
+      case Symbol(_)         => 0
+      case Branch(zero, one) => 1 + math.max(height(zero), height(one))
+    }
 
-  def symbolToCodeMap[A](tree: HuffmanTree[A]): Map[A, BitVector] = tree match {
-    case Empty     => Map.empty
-    case Symbol(s) => Map(s -> BitVector.empty)
-    case Branch(zero, one) =>
-      val zeroMap = symbolToCodeMap(zero).map { case (symbol, bits) => symbol -> (false +: bits) }
-      val oneMap  = symbolToCodeMap(one).map { case (symbol, bits) => symbol -> (true +: bits) }
-      zeroMap ++ oneMap
-  }
+  def symbolToCodeMap[A](tree: HuffmanTree[A]): Map[A, BitVector] =
+    tree match {
+      case Empty     => Map.empty
+      case Symbol(s) => Map(s -> BitVector.empty)
+      case Branch(zero, one) =>
+        val zeroMap = symbolToCodeMap(zero).map { case (symbol, bits) => symbol -> (false +: bits) }
+        val oneMap  = symbolToCodeMap(one).map { case (symbol, bits) => symbol -> (true +: bits) }
+        zeroMap ++ oneMap
+    }
 }
 
 final class HuffmanCodec[A](tree: HuffmanTree[A]) extends Codec[A] {
@@ -65,9 +69,9 @@ final class HuffmanCodec[A](tree: HuffmanTree[A]) extends Codec[A] {
 
 object HuffmanCodec {
 
-  def apply(lengths: Seq[Int]): HuffmanCodec[Int] = apply(lengths, lengths.indices)
+  def apply(lengths: Seq[Int]): Codec[Int] = apply(lengths, lengths.indices)
 
-  def apply[A](lengths: Seq[Int], symbols: Seq[A]): HuffmanCodec[A] = {
+  def apply[A](lengths: Seq[Int], symbols: Seq[A]): Codec[A] = {
     require(lengths.nonEmpty)
     require(lengths.length == symbols.length)
 
@@ -86,17 +90,23 @@ object HuffmanCodec {
     val (_, tree) =
       lengths
         .zip(symbols)
-        .foldLeft((nextCode, Empty: HuffmanTree[A])) {
+        .foldLeft((nextCode, Right(Empty: HuffmanTree[A]): Either[String, HuffmanTree[A]])) {
           case (acc, (0, _)) => acc
           case ((nextCode, tree), (codeLength, symbol)) =>
             val bits = BitVector.fromInt(nextCode(codeLength), codeLength)
-            (nextCode.updated(codeLength, nextCode(codeLength) + 1), HuffmanTree.add(tree, bits, symbol))
+            (
+              nextCode.updated(codeLength, nextCode(codeLength) + 1),
+              tree.flatMap(HuffmanTree.add(_, bits, symbol))
+            )
         }
 
-    new HuffmanCodec(tree)
+    tree.fold(
+      error => fail(Err.General(error, Nil)),
+      tree => new HuffmanCodec(tree)
+    )
   }
 
-  def interpolated(pairs: Seq[(Int, Int)]): HuffmanCodec[Int] = {
+  def interpolated(pairs: Seq[(Int, Int)]): Codec[Int] = {
     require(pairs.nonEmpty)
     val (lastLength, lastSymbol) = pairs.last
     val (lengths, symbols) = pairs

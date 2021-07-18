@@ -1,5 +1,6 @@
 package scalazip
 
+import scodec.Attempt.Successful
 import scodec.bits.{BitVector, ByteVector}
 import scodec.codecs._
 import scodec.{Attempt, Codec, DecodeResult, Decoder, Err}
@@ -20,11 +21,11 @@ class DeflateDecoder extends Decoder[ByteVector] {
 
   private val nonCompressedBlock: Decoder[List[InternalSymbol]] =
     for {
-      _    <- byteAligned(provide(()))
+      _    <- Decoder.modify(bits => bits.drop(bits.size % 8))
       len  <- uint(16)
       nlen <- uint(16)
-      _    <- if ((len & nlen) == 0) provide(()) else fail(Err.General("Invalid input.", Nil))
-      data <- bytes(len)
+      _    <- conditional[Unit]((len & nlen) != 0, fail(Err.General("Invalid non-compressed block.", Nil)))
+      data <- bytes(len).map(_.map(BitVector.reverseBitsInByte))
     } yield data.toSeq.map(Literal).toList
 
   private val fixedHuffmanBlock: Decoder[List[InternalSymbol]] = {
@@ -63,28 +64,27 @@ class DeflateDecoder extends Decoder[ByteVector] {
           else if (a == 16) uint(2).map(b => (a, b + 3))
           else if (a == 17) uint(3).map(b => (a, b + 3))
           else if (a == 18) uint(7).map(b => (a, b + 11))
-          else fail(Err.General("Invalid code.", Nil))
+          else fail(Err.General("Invalid code length code.", Nil))
         }.asDecoder,
         ListBuffer.empty[Int]
       ) {
         case ((a, 0), acc) =>
-          acc += a
-        case ((16, b), acc) if acc.nonEmpty =>
-          acc ++= List.fill(b)(acc.last)
+          Attempt.successful(acc += a)
+        case ((16, _), acc) if acc.isEmpty =>
+          Attempt.failure(Err.General("Invalid code length code.", Nil))
+        case ((16, b), acc) =>
+          Attempt.successful(acc ++= List.fill(b)(acc.last))
         case ((17 | 18, b), acc) =>
-          acc ++= List.fill(b)(0)
-      } { case (_, b) => b.length < count }
+          Attempt.successful(acc ++= List.fill(b)(0))
+      } { case (_, b) =>
+        b.length < count
+      }
     ).map(_.result())
 
-  private val lengthBase: Array[Int] =
-    // format: off
-    Array( 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 )
-    // format: on
-
-  private val distanceBase: Array[Int] =
-    // format: off
-    Array(1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577)
-    // format: on
+  // format: off
+  private val lengthBase: Array[Int] = Array( 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 )
+  private val distanceBase: Array[Int] = Array(1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577)
+  // format: on
 
   private def internalSymbol(
     literalLengthDecoder: Decoder[Int],
@@ -101,7 +101,7 @@ class DeflateDecoder extends Decoder[ByteVector] {
           lengthSymbol   = lengthBase(lengthCode - 257) + lengthExtra
           distanceSymbol = distanceBase(distanceCode) + distanceExtra
         } yield LengthDistancePair(lengthSymbol, distanceSymbol)
-      case _ => fail(Err.General("Invalid code.", Nil))
+      case code => fail(Err.General(s"Invalid code $code.", Nil))
     }
 
   private def lengthExtraBits(a: Int): Decoder[Int] = {
@@ -118,32 +118,34 @@ class DeflateDecoder extends Decoder[ByteVector] {
     dec: Decoder[A],
     zero: B
   )(
-    append: (A, B) => B
+    append: (A, B) => Attempt[B]
   )(
     condition: (Option[A], B) => Boolean
   ): BitVector => Attempt[DecodeResult[B]] =
     (bits: BitVector) => {
-      var remaining          = bits
-      var acc                = zero
-      var last: Option[A]    = None
-      var error: Option[Err] = None
-      while (condition(last, acc) && remaining.nonEmpty)
+      var remaining       = bits
+      var acc             = Attempt.successful(zero)
+      var last: Option[A] = None
+      while (acc.toOption.exists(b => condition(last, b)) && remaining.nonEmpty)
         dec.decode(remaining) match {
           case Attempt.Successful(DecodeResult(value, rest)) =>
-            acc = append(value, acc)
+            acc = acc.flatMap(b => append(value, b))
             last = Some(value)
             remaining = rest
           case Attempt.Failure(err) =>
-            error = Some(err)
+            acc = Attempt.failure(err)
             remaining = BitVector.empty
         }
-      Attempt.fromErrOption(error, DecodeResult(acc, remaining))
+      acc.map(DecodeResult(_, remaining))
     }
 
   def collectInternalSymbols(dec: Decoder[InternalSymbol]): Decoder[List[InternalSymbol]] =
     Decoder(
-      decodeCollectWhile(dec, ListBuffer.empty[InternalSymbol]) { case (a, acc) =>
-        acc += a
+      decodeCollectWhile(
+        dec,
+        ListBuffer.empty[InternalSymbol]
+      ) { case (a, acc) =>
+        Attempt.successful(acc += a)
       } { case (a, _) =>
         !a.contains(EndOfBlock)
       }
@@ -158,28 +160,27 @@ class DeflateDecoder extends Decoder[ByteVector] {
         else if (blockType == 1) fixedHuffmanBlock
         else if (blockType == 2) dynamicHuffmanBlock
         else fail(Err.General("Invalid block type.", Nil))
-      _ <-
-        conditional(
-          lastBlock,
-          byteAligned(provide(())).asDecoder.flatMap(_ => Decoder.modify(_.reverseBitOrder)).decodeOnly
-        )
+      _ <- conditional(lastBlock, Decoder.modify(bits => bits.drop(bits.size % 8).reverseBitOrder).decodeOnly)
     } yield if (lastBlock) block :+ EndOfLastBlock else block
 
-  override def decode(bits: BitVector): Attempt[DecodeResult[ByteVector]] = {
-    val dec = Decoder.modify(_.reverseBitOrder).flatMap(_ => block)
-    decodeCollectWhile(dec, ByteVector.empty.buffer) { case (internalSymbols, acc) =>
-      internalSymbols.foldLeft(acc) {
+  override def decode(bits: BitVector): Attempt[DecodeResult[ByteVector]] =
+    decodeCollectWhile(
+      block,
+      ByteVector.empty.buffer
+    ) { case (internalSymbols, acc) =>
+      internalSymbols.foldLeft(Attempt.successful(acc)) {
         case (acc, Literal(v)) =>
-          acc :+ v
+          acc.map(_ :+ v)
+        case (Successful(out), LengthDistancePair(_, distance)) if out.length < distance =>
+          Attempt.failure(Err.General("Distance value is larger than size of the output stream.", Nil))
         case (acc, LengthDistancePair(length, distance)) =>
           (0 until length).foldLeft(acc) { case (acc, _) =>
-            acc :+ acc(acc.length - distance)
+            acc.map(out => out :+ out(out.length - distance))
           }
         case (acc, _) =>
           acc
       }
     } { case (a, _) =>
       !a.flatMap(_.lastOption).contains(EndOfLastBlock)
-    }(bits)
-  }
+    }(bits.reverseBitOrder)
 }
