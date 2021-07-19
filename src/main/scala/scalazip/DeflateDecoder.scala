@@ -1,6 +1,6 @@
 package scalazip
 
-import scodec.Attempt.Successful
+import scodec.Attempt.{Failure, Successful}
 import scodec.bits.{BitVector, ByteVector}
 import scodec.codecs._
 import scodec.{Attempt, Codec, DecodeResult, Decoder, Err}
@@ -17,7 +17,7 @@ class DeflateDecoder extends Decoder[ByteVector] {
   case class LengthDistancePair(length: Int, distance: Int) extends InternalSymbol
 
   private val uint: Array[Decoder[Int]] =
-    (0 to 16).map(i => bits(i).asDecoder.map(_.reverse.toInt(signed = false))).toArray
+    (0 to 16).map(i => bits(i).map(_.reverse.toInt(signed = false))).toArray
 
   private val nonCompressedBlock: Decoder[List[InternalSymbol]] =
     for {
@@ -35,12 +35,6 @@ class DeflateDecoder extends Decoder[ByteVector] {
     collectInternalSymbols(dec)
   }
 
-  private def orderLengths(v: Vector[Int]): Vector[Int] =
-    v.padTo(19, 0)
-      .zip(Vector(16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15))
-      .sortBy(_._2)
-      .map(_._1)
-
   private val dynamicHuffmanBlock: Decoder[List[InternalSymbol]] =
     for {
       hlit        <- uint(5).map(_ + 257)
@@ -56,6 +50,12 @@ class DeflateDecoder extends Decoder[ByteVector] {
       symbols <- collectInternalSymbols(dec)
     } yield symbols
 
+  private def orderLengths(v: Vector[Int]): Vector[Int] =
+    v.padTo(19, 0)
+      .zip(Vector(16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15))
+      .sortBy(_._2)
+      .map(_._1)
+
   private def lengthSequence(count: Int, codec: Codec[Int]): Decoder[List[Int]] =
     Decoder(
       decodeCollectWhile(
@@ -64,14 +64,14 @@ class DeflateDecoder extends Decoder[ByteVector] {
           else if (a == 16) uint(2).map(b => (a, b + 3))
           else if (a == 17) uint(3).map(b => (a, b + 3))
           else if (a == 18) uint(7).map(b => (a, b + 11))
-          else fail(Err.General("Invalid code length code.", Nil))
-        }.asDecoder,
+          else fail(Err.General(s"Invalid code length code $a.", Nil))
+        },
         ListBuffer.empty[Int]
       ) {
         case ((a, 0), acc) =>
           Attempt.successful(acc += a)
         case ((16, _), acc) if acc.isEmpty =>
-          Attempt.failure(Err.General("Invalid code length code.", Nil))
+          Attempt.failure(Err.General("Invalid use of code length code 16.", Nil))
         case ((16, b), acc) =>
           Attempt.successful(acc ++= List.fill(b)(acc.last))
         case ((17 | 18, b), acc) =>
@@ -101,7 +101,7 @@ class DeflateDecoder extends Decoder[ByteVector] {
           lengthSymbol   = lengthBase(lengthCode - 257) + lengthExtra
           distanceSymbol = distanceBase(distanceCode) + distanceExtra
         } yield LengthDistancePair(lengthSymbol, distanceSymbol)
-      case code => fail(Err.General(s"Invalid code $code.", Nil))
+      case symbol => fail(Err.General(s"Invalid internal symbol $symbol.", Nil))
     }
 
   private def lengthExtraBits(a: Int): Decoder[Int] = {
@@ -132,14 +132,14 @@ class DeflateDecoder extends Decoder[ByteVector] {
             acc = acc.flatMap(b => append(value, b))
             last = Some(value)
             remaining = rest
-          case Attempt.Failure(err) =>
-            acc = Attempt.failure(err)
+          case failure: Failure =>
+            acc = failure
             remaining = BitVector.empty
         }
       acc.map(DecodeResult(_, remaining))
     }
 
-  def collectInternalSymbols(dec: Decoder[InternalSymbol]): Decoder[List[InternalSymbol]] =
+  private def collectInternalSymbols(dec: Decoder[InternalSymbol]): Decoder[List[InternalSymbol]] =
     Decoder(
       decodeCollectWhile(
         dec,
@@ -172,7 +172,7 @@ class DeflateDecoder extends Decoder[ByteVector] {
         case (acc, Literal(v)) =>
           acc.map(_ :+ v)
         case (Successful(out), LengthDistancePair(_, distance)) if out.length < distance =>
-          Attempt.failure(Err.General("Distance value is larger than size of the output stream.", Nil))
+          Attempt.failure(Err.General("Distance value is larger than the size of the output stream.", Nil))
         case (acc, LengthDistancePair(length, distance)) =>
           (0 until length).foldLeft(acc) { case (acc, _) =>
             acc.map(out => out :+ out(out.length - distance))
