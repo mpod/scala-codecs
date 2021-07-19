@@ -29,8 +29,8 @@ class DeflateDecoder extends Decoder[ByteVector] {
     } yield data.toSeq.map(Literal).toList
 
   private val fixedHuffmanBlock: Decoder[List[InternalSymbol]] = {
-    val literalCodec  = HuffmanCodec.interpolated(List((8, 0), (9, 144), (7, 256), (8, 280), (8, 287)))
-    val distanceCodec = HuffmanCodec.interpolated(List((5, 0), (5, 29)))
+    val literalCodec  = fold(HuffmanCodec.interpolated(List((8, 0), (9, 144), (7, 256), (8, 280), (8, 287))))
+    val distanceCodec = fold(HuffmanCodec.interpolated(List((5, 0), (5, 29))))
     val dec           = internalSymbol(literalCodec, distanceCodec)
     collectInternalSymbols(dec)
   }
@@ -41,14 +41,17 @@ class DeflateDecoder extends Decoder[ByteVector] {
       hdist       <- uint(5).map(_ + 1)
       hclen       <- uint(4).map(_ + 4)
       codeLengths <- vectorOfN(provide(hclen), uint(3).decodeOnly).map(orderLengths)
-      lengthCodec = HuffmanCodec(codeLengths)
+      lengthCodec = fold(HuffmanCodec(codeLengths))
       litLengths  <- lengthSequence(hlit, lengthCodec)
       distLengths <- lengthSequence(hdist, lengthCodec)
-      litCodec  = HuffmanCodec(litLengths)
-      distCodec = HuffmanCodec(distLengths)
+      litCodec  = fold(HuffmanCodec(litLengths))
+      distCodec = fold(HuffmanCodec(distLengths))
       dec       = internalSymbol(litCodec, distCodec)
       symbols <- collectInternalSymbols(dec)
     } yield symbols
+
+  private def fold[A](codec: Option[Codec[A]]): Codec[A] =
+    codec.fold(fail[A](Err.General("Failed to create codec.", Nil)))(identity)
 
   private def orderLengths(v: Vector[Int]): Vector[Int] =
     v.padTo(19, 0)

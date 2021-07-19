@@ -1,4 +1,4 @@
-name := "scala-zip"
+name := "scala-codecs"
 
 version := "0.1"
 
@@ -19,7 +19,7 @@ libraryDependencies ++= Seq(
 )
 scalacOptions ++= Seq("-unchecked", "-deprecation", "-Xcheckinit", "-encoding", "utf8", "-feature")
 
-mainClass in (Compile, run) := Some("scalazip.Console")
+mainClass in (Compile, run) := Some("scalazip.Gunzip")
 
-mainClass in assembly := Some("scalazip.Console")
+mainClass in assembly := Some("scalazip.Gunzip")
 assemblyJarName in assembly := "scala-zip.jar"
