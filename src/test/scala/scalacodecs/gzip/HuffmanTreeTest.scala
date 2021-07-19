@@ -1,8 +1,8 @@
-package scalazip
+package scalacodecs.gzip
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import scodec.bits.{BinStringSyntax, BitVector, HexStringSyntax}
+import scodec.bits.BinStringSyntax
 import scodec.{Codec, Err}
 
 class HuffmanTreeTest extends AnyFlatSpec with Matchers {

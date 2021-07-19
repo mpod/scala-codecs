@@ -1,4 +1,4 @@
-package scalazip
+package scalacodecs.gzip
 
 import scodec.Decoder
 import scodec.bits.{ByteVector, HexStringSyntax}

@@ -1,4 +1,4 @@
-package scalazip
+package scalacodecs.gzip
 
 import scodec.bits.BitVector
 import scodec.{Attempt, Codec, DecodeResult, Err, SizeBound}

@@ -1,8 +1,8 @@
-package scalazip
+package scalacodecs.gzip
 
 import scodec.Attempt.{Failure, Successful}
 import scodec.bits.{BitVector, ByteVector}
-import scodec.codecs._
+import scodec.codecs.{bits, _}
 import scodec.{Attempt, Codec, DecodeResult, Decoder, Err}
 
 import scala.collection.mutable.ListBuffer
