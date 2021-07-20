@@ -111,7 +111,7 @@ object HuffmanCodec {
         case ((l1, s1) :: (_, s2) :: Nil, (lengths, symbols)) =>
           val n = s2 - s1
           (List.fill(n)(l1) ::: lengths, (s1 until s2).toList ::: symbols)
-        case (_ :: Nil, acc) => acc
+        case (_, acc) => acc
       }
     HuffmanCodec(lengths, symbols)
   }

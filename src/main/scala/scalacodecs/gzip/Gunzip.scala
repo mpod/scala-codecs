@@ -11,7 +11,9 @@ object Gunzip extends App {
   val dec = Decoder[GzipFileFormat]
   dec.decode(bytes.toBitVector) match {
     case Attempt.Successful(DecodeResult(gzip, _)) =>
-      Files.write(Paths.get(gzip.fileName.getOrElse("out")), gzip.data.toArray)
+      val p = Paths.get(gzip.fileName.getOrElse("out"))
+      println(s"Decompressing to: ${p.toAbsolutePath}")
+      Files.write(p, gzip.data.toArray)
     case Attempt.Failure(err) =>
       println(err)
   }
