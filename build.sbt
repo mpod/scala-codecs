@@ -19,7 +19,7 @@ libraryDependencies ++= Seq(
 )
 scalacOptions ++= Seq("-unchecked", "-deprecation", "-Xcheckinit", "-encoding", "utf8", "-feature")
 
-mainClass in (Compile, run) := Some("scalazip.Gunzip")
+mainClass in (Compile, run) := Some("scalacodecs.gzip.Gunzip")
 
-mainClass in assembly := Some("scalazip.Gunzip")
+mainClass in assembly := Some("scalacodecs.gzip.Gunzip")
 assemblyJarName in assembly := "scala-zip.jar"
