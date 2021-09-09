@@ -1,6 +1,6 @@
 package scalacodecs
 
-import scalacodecs.gzip.GzipFileFormat
+import scalacodecs.gzip.GzipFile
 import scodec.bits.ByteVector
 import scodec.{Attempt, DecodeResult, Decoder}
 import scopt.OParser
@@ -29,7 +29,7 @@ object ScalaCodecs extends App {
   OParser.parse(parser, args, Config()) match {
     case Some(Config(file)) =>
       val bytes = ByteVector(Files.readAllBytes(file.toPath))
-      val dec   = Decoder[GzipFileFormat]
+      val dec   = Decoder[GzipFile]
       dec.decode(bytes.toBitVector) match {
         case Attempt.Successful(DecodeResult(gzip, _)) =>
           val p = Paths.get(gzip.fileName.getOrElse("out"))
