@@ -26,6 +26,9 @@ object StreamGzipFileDecoder {
   def toPipe[F[_]: RaiseThrowable]: Pipe[F, BitVector, BitVector] =
     in => in.map(_.reverseBitOrder).through(decoder.toPipe).through(decodeInternalSymbols[F])
 
+  def toPipeByte[F[_]: RaiseThrowable]: Pipe[F, Byte, BitVector] =
+    in => in.chunks.map(_.toBitVector).through(toPipe)
+
   class Buffer {
     private val capacity: Int                      = 32 * 1024
     private val internalBuffers: Array[ByteBuffer] = Array.fill(2)(allocate)
@@ -61,9 +64,9 @@ object StreamGzipFileDecoder {
 
     def drain: Chunk[BitVector] =
       if (i / capacity == 0)
-        Chunk(BitVector(internalBuffers(0).array()).take(i * 8))
+        Chunk(BitVector(internalBuffers(0).array().take(i)))
       else
-        Chunk(BitVector(internalBuffers(0).array()), BitVector(internalBuffers(1).array()).take(i % capacity))
+        Chunk(BitVector(internalBuffers(0).array()), BitVector(internalBuffers(1).array().take(i % capacity)))
 
     def length: Int = i
   }
